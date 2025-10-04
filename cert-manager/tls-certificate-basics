@@ -1,0 +1,59 @@
+what is a TLS certificate??
+
+1. What is TLS?
+
+TLS (Transport Layer Security) is the protocol that secures communication between two systems — e.g., your browser (https://) and a web server.
+
+It provides:
+
+🔒 Encryption — prevents eavesdropping
+
+🧾 Integrity — ensures data isn’t modified in transit
+
+✅ Authentication — confirms you’re talking to the right server
+
+TLS is achieved through certificates and keys.
+
+2. What is a Certificate?
+
+A certificate is like a digital ID card for a server or client.
+
+It contains:
+
+The public key (used for encryption/decryption)
+
+The subject (who the certificate belongs to)
+
+The issuer (who issued/signed it)
+
+Validity period
+
+Extensions like SAN (Subject Alternative Names) for domains
+
+3. Private Key vs Public Key
+
+Every certificate has a key pair:
+
+🗝️ Private Key → kept secret, used to sign or decrypt
+
+🔑 Public Key → shared publicly, used to verify or encrypt
+
+When you connect to a TLS server:
+
+The server proves it holds the private key corresponding to the certificate’s public key.
+
+This is how it proves its identity.
+
+4. What is a Certificate Authority (CA)?
+
+A CA is a trusted entity that signs certificates.
+When a CA signs a certificate, it’s effectively saying:
+
+“I, a trusted CA, confirm that this certificate belongs to example.com.”
+
+Types of CAs:
+
+Public CA — trusted globally (e.g., Let’s Encrypt, DigiCert)
+
+Private CA — internal only (e.g., your org’s self-hosted CA)
+
