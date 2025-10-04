@@ -177,3 +177,6 @@ and in cluster role binding it basically gives permission to the service account
 
 
 ## STATRTUP API CHECK
+
+startup api check is basically is a check which is being carried out in order to check that the crds to be used are being formed or not before the cert-manager pod is formed and being used.
+
