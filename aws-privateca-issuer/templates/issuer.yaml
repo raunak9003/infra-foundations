@@ -1,0 +1,9 @@
+apiVersion: awspca.cert-manager.io/v1beta1
+kind: AWSPCAClusterIssuer
+metadata:
+  name: {{ .Values.issuer.name }}
+spec:
+  {{- if eq .Values.cloud.provider "aws" }}
+  arn: arn:aws:acm-pca:{{ .Values.cloud.region | required ".Values.cloud.region is required"}}:{{ .Values.cloud.accountId | required ".Values.cloud.accountId is required"}}:certificate-authority/{{ .Values.issuer.certificateAuthorityId | required ".Values.issuer.certificateAuthorityId is required"}}
+  region: {{ .Values.cloud.region }}
+  {{- end }}
