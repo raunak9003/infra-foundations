@@ -1,0 +1,167 @@
+purpose of having aws pca
+
+aws-privateca-issuer is a cert-manager extension controller that allows Kubernetes workloads to request and receive TLS certificates issued by AWS Private Certificate Authority (PCA).
+
+Think of it like a bridge between:
+
+cert-manager (which handles Kubernetes-side certificate automation)
+
+AWS PCA (which actually signs certificates with a private CA managed in AWS)
+
+Without it, cert-manager can only issue:
+
+Self-signed certs
+
+ACME/Let’s Encrypt certs
+
+or use an internal CA (through its ca or vault issuers)
+
+With this issuer, you get enterprise-grade, AWS-managed private certificates automatically issued and renewed inside Kubernetes.
+
+
+## but why the aws pca will sign any certificate like this
+
+🧩 1. AWS PCA is Your Private Certificate Authority
+
+When you create an AWS Private CA, you own it — it’s not a public CA like Let’s Encrypt.
+You can think of it as your company’s internal Root or Intermediate CA, hosted and managed by AWS.
+
+So AWS PCA will only sign certificates for entities that are explicitly authorized to call its APIs under your AWS account.
+
+🔐 2. Security Boundary — IAM Permissions
+
+AWS PCA won’t just sign anything you throw at it.
+
+When cert-manager (via the aws-privateca-issuer controller) wants to issue a cert, it calls:
+
+```
+acm-pca:IssueCertificate
+acm-pca:GetCertificate
+acm-pca:DescribeCertificateAuthority
+```
+But those calls only succeed if the IAM Role that cert-manager’s service account is using has permissions for that specific PCA ARN.
+
+```
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCertManagerToUsePCA",
+      "Effect": "Allow",
+      "Action": [
+        "acm-pca:IssueCertificate",
+        "acm-pca:GetCertificate",
+        "acm-pca:DescribeCertificateAuthority"
+      ],
+      "Resource": "arn:aws:acm-pca:us-west-2:123456789012:certificate-authority/abcd1234-xxxx-yyyy-zzzz-9876543210ef"
+    }
+  ]
+}
+```
+
+## now if we dont have aws pca then whats the issue cert manager will itself sign it
+
+🧩 What happens if you don’t use AWS PCA
+
+Yes — you’re right that cert-manager can issue and sign certificates on its own, but how it does that depends on which issuer you configure.
+
+Cert-manager itself doesn’t sign certificates magically.
+It needs a signing backend — called an Issuer or ClusterIssuer.
+
+There are different types of issuers:
+
+| Issuer Type                      | Signs certificates using                  | Common use case                |
+| -------------------------------- | ----------------------------------------- | ------------------------------ |
+| **SelfSigned**                   | cert-manager generates a self-signed cert | quick testing                  |
+| **CA**                           | cert-manager uses its own in-cluster CA   | internal-only trust            |
+| **ACME**                         | public CA like Let’s Encrypt              | internet-facing HTTPS          |
+| **Vault / Google CAS / AWS PCA** | external managed CA                       | production-grade private trust |
+
+
+So if you don’t use AWS PCA, you’ll likely use SelfSigned or CA Issuer, which means:
+
+The certs will be trusted only inside your cluster, not across AWS or your organization.
+
+There’s no audit, no centralized policy, no external trust chain.
+
+
+## security issue
+
+Effect:
+Cert-manager signs using a root CA that lives inside Kubernetes, in a Secret.
+
+🔴 Issues:
+
+No visibility or control from AWS side.
+
+Root CA key is stored in a Kubernetes Secret, which is not secure enough for real PKI.
+
+Rotations, audits, and revocations must be handled manually.
+
+This is why security/compliance teams don’t allow in-cluster CAs for production.
+
+🧩 Step 1: What it means to "trust" a certificate
+
+When your browser or service connects to another server over HTTPS (or mTLS), it checks:
+
+“Do I trust the organization that signed this certificate?”
+
+How does it decide that?
+It looks at the Certificate Authority (CA) that signed the certificate.
+
+For example:
+
+If the CA is “Amazon Trust Services” → ✅ trusted.
+
+If the CA is “Let’s Encrypt” → ✅ trusted.
+
+If the CA is “Raunak’s Random Cluster CA” → ❌ not trusted (because nobody knows it).
+
+⚠️ Step 3: Why this causes problems
+
+Now imagine your Ingress, Load Balancer, or an external client (like your browser) connects to your service using that certificate.
+
+It receives:
+
+“Certificate signed by cert-manager Root CA”
+
+But the client says:
+
+“Who is this cert-manager CA? I don’t know this authority.”
+
+So it rejects it with the error:
+
+x509: certificate signed by unknown authority
+
+
+That’s the same as your browser saying “⚠️ Your connection is not private.”
+
+Because the CA that signed it isn’t part of any trusted CA list that AWS or browsers or systems recognize.
+
+🔐 Step 4: Security problem — CA private key inside Kubernetes
+
+When cert-manager is the CA, it stores the private key (the signing key) in a Kubernetes Secret:
+
+kubectl get secret my-root-ca -o yaml
+
+
+That means if anyone gets access to your cluster — even read-only access to Secrets — they can:
+
+Extract that key
+
+Use it to sign their own fake certificates
+
+Pretend to be any service in your cluster
+
+That’s a huge risk in production, because the whole “trust” of your TLS system can be forged.
+
+🏢 Step 5: What AWS PCA fixes
+
+AWS PCA fixes both problems:
+
+| Problem                                   | What AWS PCA does                                                                                              |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Certificates not trusted by other systems | PCA is a **central AWS-managed CA** — all AWS services (ALB, EC2, CloudFront, etc.) trust it                   |
+| CA key exposed in cluster                 | PCA’s private key is stored **inside AWS**, protected by HSM (Hardware Security Module) — **never leaves AWS** |
+| No control / audit                        | AWS CloudTrail logs every issued cert                                                                          |
+| No revocation                             | AWS PCA supports certificate revocation lists (CRL) and templates                                              |
