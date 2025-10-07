@@ -1,0 +1,166 @@
+now basically all templates are pretty simple
+
+the main stuff on which we should focus in ingress class and ingress class params.
+
+now what are ingress class??
+
+🧠 Step 1: Think of the IngressClass as a “label” or “category”
+
+The IngressClass is just a definition —
+like a named configuration that says:
+
+“If someone uses this class name (alb),
+the AWS Load Balancer Controller will handle it.”
+
+But it does nothing on its own.
+
+It’s like saying:
+
+“I’ve defined a rule for using a public ALB.”
+But until you create an Ingress that uses that rule, nothing happens.
+
+⚙️ Step 2: You control which apps get Load Balancers
+
+For example:
+
+You have an IngressClass defined:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb-public
+spec:
+  controller: ingress.k8s.aws/alb
+
+```
+
+Now two apps:
+
+🟢 App 1: Frontend (public)
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-ingress
+spec:
+  ingressClassName: alb-public
+  rules:
+    - host: shop.skyflow.com
+      http:
+        paths:
+          - path: /
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
+
+```
+✅ This one will get a Load Balancer, because it uses that alb-public class.
+```yaml
+🔴 App 2: Payment (internal)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: payment-ingress
+spec:
+  rules:
+    - host: payment.skyflow.internal
+      http:
+        paths:
+          - path: /
+            backend:
+              service:
+                name: payment-service
+                port:
+                  number: 8080
+
+```
+⚠️ Here, there’s no ingressClassName.
+Kubernetes won’t assign it to any controller,
+so nothing happens — no Load Balancer created.
+
+
+now what about ingress class params??
+
+
+IngressClassParams is an AWS-specific custom resource (CRD).
+It defines how the controller should behave when creating a load balancer for this class.
+
+Think of it like the “settings file” or “blueprint” for that IngressClass.
+
+
+🧱 Step 4: Example 1 — Public IngressClassParams
+
+Let’s say you want a public ALB that routes Internet traffic:
+```
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: IngressClassParams
+metadata:
+  name: alb-public
+spec:
+  scheme: internet-facing
+  ipAddressType: ipv4
+  tags:
+    environment: prod
+    type: public
+```
+
+Then your IngressClass points to it:
+```
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb-public
+spec:
+  controller: ingress.k8s.aws/alb
+  parameters:
+    apiGroup: elbv2.k8s.aws
+    kind: IngressClassParams
+    name: alb-public
+```
+
+✅ Result:
+Whenever you create an Ingress with ingressClassName: alb-public,
+AWS Load Balancer Controller will create an internet-facing ALB.
+
+🧱 Step 5: Example 2 — Internal IngressClassParams
+
+Now for private/internal services:
+```
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: IngressClassParams
+metadata:
+  name: alb-internal
+spec:
+  scheme: internal
+  namespaceSelector:
+    matchLabels:
+      access: private
+  tags:
+    environment: prod
+    type: internal
+
+```
+Then link it in the IngressClass:
+```
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: alb-internal
+spec:
+  controller: ingress.k8s.aws/alb
+  parameters:
+    apiGroup: elbv2.k8s.aws
+    kind: IngressClassParams
+    name: alb-internal
+
+```
+✅ Result:
+
+ALBs created for this class are private (internal).
+
+Only namespaces with label access: private can use it.
+
+This prevents devs from accidentally exposing internal services (like payment).
