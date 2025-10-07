@@ -1,0 +1,187 @@
+## 🧠 Imagine this
+
+You have an app running inside Kubernetes (EKS) — say, a small web app with a Pod.
+
+Now, you want people to open it in a browser, like:
+👉 https://my-app.skyflow.com
+
+But here’s the problem:
+
+Kubernetes Pods don’t have public IPs.
+You can’t directly reach them from the internet.
+
+## 💡 So What Do We Need?
+
+We need something that:
+
+Gets traffic from the outside world 🌍
+
+Sends it safely to the right Pod inside EKS 🎯
+
+That “something” is called a Load Balancer.
+
+It’s like a receptionist 🧍‍♀️ sitting at the front door:
+
+Knows where to send each visitor (request)
+
+Balances load between all servers (Pods)
+
+Can handle secure (HTTPS) connections
+
+## ⚙️ But Who Creates This Load Balancer?
+
+You could go to the AWS console and manually create an ALB/NLB,
+then connect it to your Pods…
+but that’s painful 😩 — lots of manual steps, and it breaks when Pods change.
+
+So AWS made a helper:
+
+AWS Load Balancer Controller 🎯
+
+It’s a Kubernetes controller that does this automatically.
+
+
+## 🪄 What It Does
+
+1️⃣ You create a normal Kubernetes Service or Ingress
+(just YAML — like every other resource).
+
+2️⃣ The AWS Load Balancer Controller sees that,
+and says:
+“Oh, you want to expose this app? Let me handle it.”
+
+3️⃣ It goes to AWS and creates a real Load Balancer (ALB or NLB).
+
+Adds target groups for your Pods
+
+Adds listeners for HTTP/HTTPS
+
+Sets up health checks
+
+Updates everything when Pods change
+
+4️⃣ You get a working AWS Load Balancer — automatically! 🪄
+
+
+
+🔍 Example
+
+You create:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+spec:
+  type: LoadBalancer
+  selector:
+    app: my-app
+  ports:
+    - port: 80
+```
+
+Then the controller:
+
+Creates an NLB in AWS
+
+Connects it to your app’s Pods
+
+Gives you a DNS name (like a1b2c3d4.us-west-2.elb.amazonaws.com)
+
+Now you can open that URL — it reaches your app 🎉
+
+## 🧱 Step 1: What NodePort (you said “node IP”) actually does
+
+When you set a Kubernetes Service like this:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+spec:
+  type: NodePort
+  selector:
+    app: my-app
+  ports:
+  - port: 80
+    nodePort: 30080
+```
+
+It means:
+
+Kubernetes opens port 30080 on every worker node in your cluster.
+
+Any request coming to a node’s IP on port 30080 is forwarded to your app’s Pod (through kube-proxy / iptables).
+
+✅ So yes — you can access your app using:
+
+http://<node-public-ip>:30080
+
+
+⚠️ Step 2: The problem with NodePort
+
+That works technically, but it’s not practical or safe for production.
+
+Let’s see why 👇
+
+❌ Problem 1 — No single entry point
+
+You might have 3 nodes today, 6 tomorrow.
+Which node’s IP do you give your users? 🤔
+If one node goes down → users hitting that IP get errors.
+
+There’s no automatic balancing — you’re managing node IPs manually.
+
+❌ Problem 2 — Node IPs aren’t stable
+
+AWS EC2 nodes (in EKS) are ephemeral:
+
+When nodes are scaled up/down, their IPs change.
+
+New nodes join with new IPs.
+
+So your app endpoint keeps changing → users can’t rely on a fixed address.
+
+❌ Problem 3 — No HTTPS, WAF, or TLS
+
+NodePort is just raw TCP.
+It doesn’t:
+
+Terminate HTTPS
+
+Attach AWS ACM or PCA certificates
+
+Support WAF, Shield, or health checks
+
+Distribute traffic evenly
+
+Basically, it’s a dumb forwarder — no smart routing or security.
+
+🧠 Step 3: What Load Balancer fixes
+
+Now enter: AWS Load Balancer Controller + LoadBalancer Service
+
+When you set:
+
+type: LoadBalancer
+
+
+Kubernetes asks AWS to create:
+
+An NLB (for TCP) or
+
+An ALB (for HTTP/HTTPS)
+
+Then AWS automatically:
+
+Gives you a single DNS name (like abc123.elb.amazonaws.com)
+
+Distributes traffic across all nodes/pods
+
+Auto-updates when nodes scale up/down
+
+Handles TLS certificates and security
+
+Keeps the endpoint stable even when cluster topology changes
