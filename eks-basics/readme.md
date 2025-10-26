@@ -462,3 +462,370 @@ When pods can’t be scheduled:
 - It analyzes their needs (CPU, memory, GPU, zone, taints, etc.).
 - It directly calls EC2’s API to launch the best-fitting instance.
 - The new node joins → pods start running — all in seconds.
+
+
+# 🌐 2️⃣ EKS Networking Deep Dive
+
+Kubernetes networking is already complex — then AWS adds its VPC and ENI concepts.
+EKS bridges those worlds using the AWS VPC CNI plugin.
+
+## ⚙️ AWS VPC CNI Plugin (Container Network Interface)
+
+CNI = Container Network Interface → defines how pods get network connectivity.
+EKS uses the AWS VPC CNI plugin, developed and maintained by AWS.
+
+🔍 What it does
+
+The VPC CNI plugin assigns:
+
+- VPC-native IP addresses (from your subnets)
+
+- Direct ENI (Elastic Network Interface) attachments to your pods.
+
+## 🧩 How it works under the hood
+
+Each EC2 node (worker) has:
+
+- 1 primary ENI (attached at launch)
+
+- Some number of secondary ENIs that can host multiple pod IPs
+
+The CNI plugin:
+
+- Requests ENIs from the VPC subnet.
+- Attaches them to the EC2 node.
+- Allocates IPs from those ENIs to the pods running on that node.
+
+### lets dig deep buddy
+
+## 🧠 First: What problem is the CNI solving?
+
+When you create a pod in Kubernetes, that pod needs a network identity — an IP address — so it can:
+
+- communicate with other pods,
+- talk to the internet,
+- talk to AWS services (like S3, RDS, etc).
+
+So the CNI plugin decides how and from where to get that IP address.
+
+## 🧩 Let’s imagine it visually
+
+🏠 Your VPC subnet
+Think of your subnet like a neighborhood of IP houses — say you have:
+```
+10.0.0.0/24  →  256 possible IPs
+```
+Some IPs go to:
+
+- EC2 instances (nodes)
+- Load balancers
+- Pods
+
+### ⚙️ When you create an EC2 node (a worker node)
+That EC2 instance automatically gets: 1 Primary ENI (Elastic Network Interface) — this is like the node’s “main network card.”
+
+```
+Node1 ENI → 10.0.0.5
+```
+
+### 🔌 Now comes the magic: Secondary ENIs
+
+Each EC2 instance type supports multiple ENIs.
+Each ENI can have multiple private IPs.
+
+
+why do we need secondary eni??
+
+Your node can run many pods, and each pod needs a unique IP.
+
+But:
+
+The primary ENI has only one private IP (or a few).
+
+We need more IPs to assign to all those pods.
+
+So the AWS VPC CNI plugin says:
+
+“Hey AWS, please give me more network interfaces (ENIs)
+so I can get more IPs to hand out to pods.”
+
+AWS attaches secondary ENIs to your EC2 node.
+Each secondary ENI:
+
+belongs to the same subnet,
+
+has multiple private IP addresses,
+
+can be used by the VPC CNI to assign IPs to pods.
+
+
+🧩 Example
+
+Suppose:
+
+Subnet = 10.0.0.0/24
+
+Node (EC2) = 10.0.0.5 (primary ENI)
+
+Secondary ENI attached = eni-12345
+
+Secondary ENI has these private IPs: 10.0.0.10–10.0.0.14
+
+| Pod   | Assigned IP | From where?   |
+| ----- | ----------- | ------------- |
+| Pod-A | 10.0.0.10   | Secondary ENI |
+| Pod-B | 10.0.0.11   | Secondary ENI |
+| Pod-C | 10.0.0.12   | Secondary ENI |
+
+
+📊 Why it’s awesome
+
+✅ Simple routing — no overlays, no extra hops
+✅ Native VPC security controls
+✅ Pod-to-pod, pod-to-service, and pod-to-AWS-service networking “just works”
+✅ Lower latency
+
+
+⚠️ But there are limits
+
+Each EC2 instance type has a maximum number of ENIs and IPs per ENI.
+
+Example (us-west-2):
+
+| Instance Type | Max ENIs | IPs per ENI | Max Pods |
+| ------------- | -------- | ----------- | -------- |
+| t3.medium     | 3        | 6           | 17       |
+| m5.large      | 3        | 10          | 29       |
+| m5.2xlarge    | 4        | 30          | 110      |
+
+
+```
+VPC
+ ├─ Subnet (10.0.0.0/24)
+ │   ├─ EC2 Node (10.0.0.5)
+ │   │   ├─ ENI1 (primary)
+ │   │   ├─ ENI2 (secondary)
+ │   │   │   ├─ Pod A (10.0.0.6)
+ │   │   │   ├─ Pod B (10.0.0.7)
+ │   │   │   ├─ Pod C (10.0.0.8)
+```
+
+## 🔐 Security Groups for Pods (SGP)
+
+By default:
+
+All pods on a node share the node’s security group.
+
+If you need fine-grained network isolation (e.g., DB pods can’t talk to web pods), you can use Security Groups for Pods.
+
+🧱 How it works
+
+Uses ENI Trunking to attach multiple security groups to a node.
+
+CNI plugin assigns specific SGs to specific pods.
+
+You annotate pods with SGs.
+
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-db
+  annotations:
+    k8s.v1.cni.cncf.io/networks: vpc-cni
+    vpc.amazonaws.com/pod-eni: "true"
+    vpc.amazonaws.com/security-groups: sg-0abcd1234ef56789
+```
+
+### lets dig deep
+
+🧩 What are Security Groups?
+
+A Security Group (SG) is like a firewall in AWS.
+It decides which traffic can go in or out of a resource (like an EC2, RDS, or ENI).
+
+Example:
+sg-web allows TCP 80/443 (HTTP/HTTPS) from the internet.
+sg-db allows TCP 5432 (PostgreSQL) only from sg-web.
+
+
+🧩 What’s the default situation in EKS?
+
+
+By default:
+
+Each node (EC2 instance) in EKS has one security group, say sg-node.
+
+All pods on that node share that same security group.
+
+
+That means all pods on that node:
+
+Can talk to everything sg-node allows.
+
+Have no separate network firewall rules between them.
+
+
+So if you put both a web pod and a database pod on the same node — they both use sg-node, and they can talk to each other freely, even if you didn’t want that.
+
+
+🧱 Problem
+
+You might want:
+
+Frontend pods → allowed from internet (port 80)
+
+Backend pods → only internal traffic
+
+Database pods → only allow backend pods on port 5432
+
+### 🧠 Solution — Security Groups for Pods (SGP)
+
+SGP lets you attach a separate AWS security group directly to individual pods, not just to nodes.
+
+
+This means:
+
+Each pod can have its own firewall rules, just like an EC2 instance.
+
+So your database pod can have sg-db (only backend access),
+and your frontend pod can have sg-web (public access),
+even if they’re running on the same node!
+
+
+### ⚙️ How AWS makes that possible (ENI Trunking)
+
+ENIs (Elastic Network Interfaces) are like network cards attached to EC2s.
+But there’s a limit on how many you can attach to a node — normally just a few.
+
+So AWS invented ENI Trunking for this.
+
+Think of it like this 👇
+
+```
+[EC2 Node]
+   │
+   ├── Trunk ENI  ← main “pipe” that carries traffic
+   │
+   ├── Branch ENI (for Pod A) → Security Group = sg-web
+   ├── Branch ENI (for Pod B) → Security Group = sg-db
+   └── Branch ENI (for Pod C) → Security Group = sg-backend
+```
+
+Each Branch ENI belongs to one pod, and it can have its own security group.
+
+The VPC CNI plugin does this automatically when you annotate your pod.
+
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: db-pod
+  annotations:
+    vpc.amazonaws.com/pod-eni: "true"
+    vpc.amazonaws.com/security-groups: sg-0abcd1234ef56789
+spec:
+  containers:
+    - name: postgres
+      image: postgres
+```
+
+🧩 Meaning:
+
+vpc.amazonaws.com/pod-eni: "true" → create a dedicated ENI for this pod.
+
+vpc.amazonaws.com/security-groups: → attach this SG to that ENI.
+
+Now that pod:
+
+Gets its own IP and network interface.
+
+Has its own SG — not the node’s SG.
+
+
+# upcoming
+
+4️⃣ EKS Add-ons
+
+Built-in AWS add-ons:
+
+CoreDNS, kube-proxy
+
+VPC CNI
+
+Optional:
+
+AWS Load Balancer Controller
+
+Cluster Autoscaler
+
+Metrics Server
+
+External Secrets Operator
+
+FluentBit (for logs)
+
+Include how to install them via:
+
+eksctl utils associate-iam-oidc-provider
+eksctl create addon --name vpc-cni
+
+5️⃣ Security in EKS
+
+IAM Roles for Service Accounts (IRSA) – least-privilege pod access
+
+Network Policies – control pod-to-pod communication
+
+Secrets management via AWS Secrets Manager / External Secrets
+
+EKS Pod Identity (newer alternative to IRSA)
+
+Encryption at rest (KMS + etcd)
+
+Security scanning with tools like Trivy or Kube-bench
+
+6️⃣ EKS Cluster Access & Authentication
+
+How aws-auth ConfigMap maps IAM users/roles → Kubernetes RBAC
+
+Use of kubectl, aws eks update-kubeconfig
+
+Fine-grained RBAC for namespaces, service accounts, etc.
+
+7️⃣ EKS Upgrades & Versioning
+
+AWS manages control plane upgrades
+
+You manage node AMI upgrades (kubelet version)
+
+Rolling upgrades & draining strategies for production
+
+8️⃣ Observability & Logging
+
+CloudWatch Container Insights for metrics
+
+FluentBit / FluentD for centralized logging
+
+Prometheus + Grafana for in-cluster monitoring
+
+AWS Distro for OpenTelemetry (ADOT) for tracing
+
+9️⃣ Deployment Workflows
+
+kubectl / kustomize / Helm for manifests
+
+ArgoCD or Flux for GitOps
+
+CI/CD Integration – using GitHub Actions, CodePipeline, etc.
+
+🔟 Cost Optimization & Best Practices
+
+Use spot instances in node groups
+
+Use right-sizing metrics from CloudWatch / Cost Explorer
+
+Cluster Autoscaler and Karpenter tuning
+
+Cleanup unused EBS volumes, ENIs, or old images in ECR
