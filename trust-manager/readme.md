@@ -54,6 +54,14 @@ But it cannot create:
 merged-ca-bundle ❌
 ```
 
+The only way Reflector could “appear” to handle merging is if you pre-merge certificates somewhere else.
+For example:
+
+Use a script, cert-manager, or another controller to create a single merged ConfigMap or Secret.
+
+Let Reflector replicate that one combined object across namespaces.
+
+
 
 ## summary
 
