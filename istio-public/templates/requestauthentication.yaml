@@ -1,0 +1,27 @@
+{{- range $key, $val := .Values.requestAuthentication.services }}
+---
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: {{ $val.name }}
+  namespace: {{ $val.namespace }}
+spec:
+  {{- if $val.selector }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $val.selector }}
+  {{- end }}
+  jwtRules:
+{{- range $jwks := $val.jwkRules }}
+  - issuer: {{ $jwks.issuer }}
+    jwksUri: {{ $jwks.jwksUri }}
+    {{- if $jwks.jwtHeaders }}
+    fromHeaders:
+    - name: {{ $jwks.jwtHeaders }}
+    {{ if $jwks.prefix }}
+      prefix: "Bearer "
+    {{- end }}
+    {{- end -}}
+{{- end }}
+    forwardOriginalToken: true
+{{- end }}
