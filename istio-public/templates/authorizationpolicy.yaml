@@ -1,0 +1,51 @@
+{{- range $key, $val := .Values.authorizationPolicy.services }}
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ $val.name }}
+  namespace: {{ $val.namespace }}
+spec:
+  {{- range $list := $val.authn }}
+  selector:
+    matchLabels:
+      {{- range $key, $value := $list.selector }}
+        {{ $key }}: {{ $value | quote }}
+      {{- end }}
+  action: {{ $val.action }}
+  {{- if $val.provider}}
+  provider:
+    name: {{ $val.provider }}
+  {{- end }}
+  rules:
+  {{- range $paths := $list.paths }}
+    - {{ if $paths.from -}}
+      from:
+      - source:
+        {{- range $k, $v := $paths.from }}
+          {{ $k }}:
+          {{- range $v}}
+          - {{ . | quote }}
+          {{- end }}
+      {{ end }}
+      {{- end }}
+      {{- if $paths.to -}}
+      to:
+      - operation:
+        {{- range $k, $v := $paths.to }}
+          {{ $k }}:
+          {{- range $v}}
+          - {{ . | quote }}
+          {{- end }}
+      {{ end }}
+      {{- end }}
+      {{- if $paths.when }}when:
+      {{- range $when := $paths.when}}
+      - key: {{ $when.key }}
+        values: [ {{range $i, $v := $when.value }}{{if $i}} ,{{end}}"{{.}}"{{end}} ]
+      {{- end }}
+      {{- end }}
+  {{- end }}
+  {{- end }}
+---
+{{- end }}
